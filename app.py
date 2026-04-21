@@ -60,14 +60,14 @@ if uploaded_file:
     # ===== CLEAN HEADERS =====
     df.columns = df.columns.str.strip()
 
-    # ===== REMOVE DUPLICATES =====
+    # ===== REMOVE DUPLICATE COLUMNS =====
     df = df.loc[:, ~df.columns.duplicated()]
 
     # ===== NORMALIZE FUNCTION =====
     def normalize(col):
         return col.lower().replace(" ", "").replace("(", "").replace(")", "").replace("_", "")
 
-    # ===== MAP BASIC COLUMNS =====
+    # ===== BASIC COLUMN MAPPING =====
     col_map = {}
 
     for col in df.columns:
@@ -102,7 +102,7 @@ if uploaded_file:
 
     df = df.rename(columns=col_map)
 
-    # ===== FIX EMA COLUMNS (CRITICAL) =====
+    # ===== FIX EMA COLUMNS (ORDER BASED) =====
     ema_cols = [col for col in df.columns if "ema" in col.lower()]
 
     if len(ema_cols) >= 3:
@@ -120,8 +120,28 @@ if uploaded_file:
         st.write("Detected columns:", df.columns.tolist())
         st.stop()
 
-    # ===== CLEAN DATA =====
-    df = df.dropna(subset=["Price","RSI","ADX"])
+    # ===== FIX DATA TYPES (CRITICAL FIX) =====
+    numeric_cols = [
+        "Price","EMA20","EMA50","EMA200",
+        "RSI","ADX","MACD","Signal","Volume","ATR"
+    ]
+
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(",", "")
+                .str.replace(" ", "")
+            )
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # ===== REMOVE INVALID ROWS =====
+    df = df.dropna(subset=["Price","EMA20","EMA50","EMA200","RSI","ADX"])
+
+    if df.empty:
+        st.error("All rows removed due to invalid numeric data.")
+        st.stop()
 
     # ===== CORE LOGIC =====
     df['trend'] = ((df['Price'] > df['EMA200']) &
@@ -238,7 +258,7 @@ if uploaded_file:
         st.write(f"Win Rate: {round(win_rate*100,2)}%")
         st.write(f"Total PnL: ₹{round(journal['pnl'].sum(),2)}")
 
-    # ===== TELEGRAM =====
+    # ===== TELEGRAM ALERT =====
     if not final_df.empty and final_df['confidence'].max() > 75:
         msg = "🚀 Top Trades:\n"
         for _, r in final_df.head(3).iterrows():
