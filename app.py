@@ -34,12 +34,15 @@ def send_telegram(msg):
 
 # ================= SETUP =================
 def get_setup(row):
-    if abs(row['Price'] - row['EMA20']) / row['EMA20'] < 0.02:
-        return "Pullback"
-    elif row['RSI'] > 60:
-        return "Breakout"
-    else:
-        return "Momentum"
+    try:
+        if abs(row['Price'] - row['EMA20']) / row['EMA20'] < 0.02:
+            return "Pullback"
+        elif row['RSI'] > 60:
+            return "Breakout"
+        else:
+            return "Momentum"
+    except:
+        return "Unknown"
 
 # ================= UI =================
 st.title("📊 V8 Institutional Trading Engine")
@@ -120,27 +123,26 @@ if uploaded_file:
         st.write("Detected columns:", df.columns.tolist())
         st.stop()
 
-    # ===== FIX DATA TYPES (CRITICAL FIX) =====
+    # ===== FIX DATA TYPES =====
     numeric_cols = [
         "Price","EMA20","EMA50","EMA200",
         "RSI","ADX","MACD","Signal","Volume","ATR"
     ]
 
     for col in numeric_cols:
-        if col in df.columns:
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.replace(",", "")
-                .str.replace(" ", "")
-            )
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        df[col] = (
+            df[col]
+            .astype(str)
+            .str.replace(",", "")
+            .str.replace(" ", "")
+        )
+        df[col] = pd.to_numeric(df[col], errors='coerce')
 
     # ===== REMOVE INVALID ROWS =====
     df = df.dropna(subset=["Price","EMA20","EMA50","EMA200","RSI","ADX"])
 
     if df.empty:
-        st.error("All rows removed due to invalid numeric data.")
+        st.error("All rows removed due to invalid data.")
         st.stop()
 
     # ===== CORE LOGIC =====
@@ -169,6 +171,9 @@ if uploaded_file:
     df['SL'] = df['Price'] - (1.5 * df['ATR'])
     df['Target'] = df['Price'] + 2 * (df['Price'] - df['SL'])
     df['Risk'] = df['Price'] - df['SL']
+
+    # avoid divide by zero
+    df = df[df['Risk'] > 0]
 
     # ===== CONFIDENCE =====
     df['confidence'] = df['final_score']
@@ -207,10 +212,15 @@ if uploaded_file:
         if sector_count.get(sec, 0) >= 2:
             continue
 
-        selected.append(row)
+        selected.append(row.to_dict())   # ✅ FIXED
+
         total_risk += risk
         sector_alloc[sec] = sector_alloc.get(sec, 0) + risk
         sector_count[sec] = sector_count.get(sec, 0) + 1
+
+    if not selected:
+        st.warning("No trades passed filters.")
+        st.stop()
 
     final_df = pd.DataFrame(selected)
 
