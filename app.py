@@ -28,8 +28,9 @@ conn.commit()
 def send_telegram(msg):
     TOKEN = "YOUR_TOKEN"
     CHAT_ID = "YOUR_CHAT_ID"
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    if TOKEN != "YOUR_TOKEN":
+        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
 # ================= SETUP CLASSIFICATION =================
 def get_setup(row):
@@ -54,12 +55,57 @@ required_cols = [
 
 if uploaded_file:
 
+    # ===== LOAD CSV =====
     df = pd.read_csv(uploaded_file)
 
+    # ===== CLEAN COLUMN NAMES =====
+    df.columns = df.columns.str.strip()
+
+    def normalize(col):
+        return col.lower().replace(" ", "").replace("(", "").replace(")", "")
+
+    col_map = {}
+
+    for col in df.columns:
+        n = normalize(col)
+
+        if "stock" in n or "symbol" in n:
+            col_map[col] = "Stock"
+        elif "close" in n or "price" in n:
+            col_map[col] = "Price"
+        elif "ema20" in n:
+            col_map[col] = "EMA20"
+        elif "ema50" in n:
+            col_map[col] = "EMA50"
+        elif "ema200" in n:
+            col_map[col] = "EMA200"
+        elif "rsi" in n:
+            col_map[col] = "RSI"
+        elif "adx" in n:
+            col_map[col] = "ADX"
+        elif "macd" in n and "signal" not in n:
+            col_map[col] = "MACD"
+        elif "signal" in n:
+            col_map[col] = "Signal"
+        elif "volume" in n:
+            col_map[col] = "Volume"
+        elif "atr" in n:
+            col_map[col] = "ATR"
+        elif "sector" in n:
+            col_map[col] = "Sector"
+
+    df = df.rename(columns=col_map)
+
     # ===== VALIDATION =====
-    if any(col not in df.columns for col in required_cols):
-        st.error("Invalid CSV format")
+    missing = [c for c in required_cols if c not in df.columns]
+
+    if missing:
+        st.error(f"Missing columns after mapping: {missing}")
+        st.write("Detected columns:", df.columns.tolist())
         st.stop()
+
+    # ===== CLEAN DATA =====
+    df = df.dropna(subset=["Price","RSI","ADX"])
 
     # ===== CORE LOGIC =====
     df['trend'] = ((df['Price'] > df['EMA200']) &
@@ -73,7 +119,7 @@ if uploaded_file:
 
     df['base_score'] = df[['trend','momentum','trigger']].sum(axis=1)
 
-    # ===== SECTOR =====
+    # ===== SECTOR STRENGTH =====
     sector_strength = df.groupby('Sector')['RSI'].mean().sort_values(ascending=False)
     top_sectors = sector_strength.head(2).index.tolist()
 
@@ -102,7 +148,7 @@ if uploaded_file:
 
     df = df.sort_values(by='confidence', ascending=False)
 
-    # ===== PORTFOLIO FILTER =====
+    # ===== PORTFOLIO RULES =====
     max_portfolio_risk = 0.05
     max_sector_exposure = 0.3
 
@@ -138,7 +184,7 @@ if uploaded_file:
     for i, row in final_df.iterrows():
         st.markdown(f"""
         **{row['Stock']}** | {row['Sector']}  
-        Conf: {row['confidence']}  
+        Confidence: {row['confidence']}  
 
         Entry: ₹{round(row['Price'],2)}  
         SL: ₹{round(row['SL'],2)}  
@@ -158,6 +204,7 @@ if uploaded_file:
     journal = pd.read_sql("SELECT * FROM trades", conn)
 
     if not journal.empty:
+
         journal['pnl'] = journal['pnl'].fillna(0)
         journal['equity'] = journal['pnl'].cumsum()
         journal['peak'] = journal['equity'].cummax()
@@ -169,26 +216,19 @@ if uploaded_file:
         st.subheader("📉 Drawdown")
         st.line_chart(journal['drawdown'])
 
-        # ===== ANALYTICS =====
-        st.subheader("📊 Performance")
-
         wins = journal[journal['pnl'] > 0]
-        losses = journal[journal['pnl'] <= 0]
+        win_rate = len(wins) / len(journal)
 
-        win_rate = len(wins) / len(journal) if len(journal) else 0
-
+        st.subheader("📊 Performance")
         st.write(f"Win Rate: {round(win_rate*100,2)}%")
         st.write(f"Total PnL: ₹{round(journal['pnl'].sum(),2)}")
 
-        # ===== REPORT =====
-        if st.button("Send Daily Report"):
-
-            msg = f"📊 Daily Report\nRisk Used: {round(total_risk,2)}\n\n"
-
-            for _, r in final_df.iterrows():
-                msg += f"{r['Stock']} | {r['confidence']}\n"
-
-            send_telegram(msg)
+    # ===== TELEGRAM ALERT =====
+    if not final_df.empty and final_df['confidence'].max() > 75:
+        msg = "🚀 Top Trades:\n"
+        for _, r in final_df.head(3).iterrows():
+            msg += f"{r['Stock']} | Conf: {r['confidence']}\n"
+        send_telegram(msg)
 
 else:
     st.info("Upload CSV to begin")
