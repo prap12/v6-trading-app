@@ -32,7 +32,7 @@ def send_telegram(msg):
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
 
-# ================= SETUP CLASSIFICATION =================
+# ================= SETUP =================
 def get_setup(row):
     if abs(row['Price'] - row['EMA20']) / row['EMA20'] < 0.02:
         return "Pullback"
@@ -45,7 +45,6 @@ def get_setup(row):
 st.title("📊 V8 Institutional Trading Engine")
 
 capital = st.number_input("Capital ₹", value=100000)
-
 uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
 
 required_cols = [
@@ -55,15 +54,20 @@ required_cols = [
 
 if uploaded_file:
 
-    # ===== LOAD CSV =====
+    # ===== LOAD =====
     df = pd.read_csv(uploaded_file)
 
-    # ===== CLEAN COLUMN NAMES =====
+    # ===== CLEAN HEADERS =====
     df.columns = df.columns.str.strip()
 
-    def normalize(col):
-        return col.lower().replace(" ", "").replace("(", "").replace(")", "")
+    # ===== REMOVE DUPLICATES =====
+    df = df.loc[:, ~df.columns.duplicated()]
 
+    # ===== NORMALIZE FUNCTION =====
+    def normalize(col):
+        return col.lower().replace(" ", "").replace("(", "").replace(")", "").replace("_", "")
+
+    # ===== MAP BASIC COLUMNS =====
     col_map = {}
 
     for col in df.columns:
@@ -71,32 +75,44 @@ if uploaded_file:
 
         if "stock" in n or "symbol" in n:
             col_map[col] = "Stock"
+
         elif "close" in n or "price" in n:
             col_map[col] = "Price"
-        elif "ema20" in n:
-            col_map[col] = "EMA20"
-        elif "ema50" in n:
-            col_map[col] = "EMA50"
-        elif "ema200" in n:
-            col_map[col] = "EMA200"
+
         elif "rsi" in n:
             col_map[col] = "RSI"
+
         elif "adx" in n:
             col_map[col] = "ADX"
+
         elif "macd" in n and "signal" not in n:
             col_map[col] = "MACD"
+
         elif "signal" in n:
             col_map[col] = "Signal"
+
         elif "volume" in n:
             col_map[col] = "Volume"
-        elif "atr" in n:
+
+        elif "atr" in n or "avgtruerange" in n:
             col_map[col] = "ATR"
+
         elif "sector" in n:
             col_map[col] = "Sector"
 
     df = df.rename(columns=col_map)
 
-    # ===== VALIDATION =====
+    # ===== FIX EMA COLUMNS (CRITICAL) =====
+    ema_cols = [col for col in df.columns if "ema" in col.lower()]
+
+    if len(ema_cols) >= 3:
+        df = df.rename(columns={
+            ema_cols[0]: "EMA20",
+            ema_cols[1]: "EMA50",
+            ema_cols[2]: "EMA200"
+        })
+
+    # ===== VALIDATE =====
     missing = [c for c in required_cols if c not in df.columns]
 
     if missing:
@@ -204,7 +220,6 @@ if uploaded_file:
     journal = pd.read_sql("SELECT * FROM trades", conn)
 
     if not journal.empty:
-
         journal['pnl'] = journal['pnl'].fillna(0)
         journal['equity'] = journal['pnl'].cumsum()
         journal['peak'] = journal['equity'].cummax()
@@ -223,7 +238,7 @@ if uploaded_file:
         st.write(f"Win Rate: {round(win_rate*100,2)}%")
         st.write(f"Total PnL: ₹{round(journal['pnl'].sum(),2)}")
 
-    # ===== TELEGRAM ALERT =====
+    # ===== TELEGRAM =====
     if not final_df.empty and final_df['confidence'].max() > 75:
         msg = "🚀 Top Trades:\n"
         for _, r in final_df.head(3).iterrows():
